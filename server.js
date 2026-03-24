@@ -13,7 +13,7 @@ const Order = require("./Order");
 const app = express();
 app.use(cors());
 app.use(express.json());
-const pendingUsers = {};
+
 
 
 console.log("ENV CHECK:", process.env.EMAIL);
@@ -135,6 +135,8 @@ mongoose.connect(process.env.MONGO_URI)
 //   }
 // });
 //TESTING NEW REGISTER ROUTE
+const pendingUsers = {};  
+
 app.post("/api/register", async (req,res)=>{
   try{
 
@@ -150,6 +152,12 @@ app.post("/api/register", async (req,res)=>{
       otpExpire
     });
 
+        pendingUsers[email] = {
+      email,
+      password,
+      otp,
+      otpExpire
+    };
     //await newUser.save();
 
     await transporter.sendMail({
@@ -403,6 +411,79 @@ app.post("/api/cart/add", async (req, res) => {
   }
 });
 
+app.post("/api/cart/delete", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ message: "No token" });
+
+    const token = authHeader.split(" ")[1];
+    if (!token) return res.status(401).json({ message: "Token missing" });
+
+    const decoded = jwt.verify(token, "junaid_secret_key");
+    const userId = decoded.id;
+
+    const { productId } = req.body;
+    if (!productId) return res.status(400).json({ message: "productId required" });
+
+    // Find the user's cart
+    const cart = await Cart.findOne({ userId });
+    if (!cart) return res.status(404).json({ message: "Cart not found" });
+
+    // Remove the item
+    cart.items = cart.items.filter(item => item.productId !== productId);
+
+    await cart.save();
+
+    res.json({ success: true, cart });
+  } catch (err) {
+    console.log("JWT Error:", err.message);
+    res.status(401).json({ message: "Invalid token" });
+  }
+});
+
+
+app.delete("/api/cart/delete/:productId", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ message: "No token" });
+
+    const token = authHeader.split(" ")[1];
+    if (!token) return res.status(401).json({ message: "Token missing" });
+
+    const decoded = jwt.verify(token, "junaid_secret_key");
+    const userId = decoded.id;
+
+    const { productId } = req.params; // <-- get from URL
+    if (!productId) return res.status(400).json({ message: "productId required" });
+
+    // Find user's cart
+    const cart = await Cart.findOne({ userId });
+    if (!cart) return res.status(404).json({ message: "Cart not found" });
+
+    // Remove the item
+    cart.items = cart.items.filter(item => item.productId !== productId);
+
+    await cart.save();
+
+    res.json({ success: true, cart });
+  } catch (err) {
+    console.log("JWT Error:", err.message);
+    res.status(401).json({ message: "Invalid token" });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 app.get("/api/product/search", async (req, res) => {
   try {
@@ -597,25 +678,67 @@ const authMiddleware = (req, res, next) => {
 
 
 
+// app.post("/api/order", authMiddleware, async (req, res) => {
+//   try {
+//     const { address, phone } = req.body;
+//     const userId = req.user.id;
+
+//     const cart = await Cart.findOne({ userId });
+
+//     if (!cart || cart.items.length === 0) {
+//       return res.status(400).json({ message: "Cart empty" });
+//     }
+
+//     const total = cart.items.reduce(
+//       (acc, item) => acc + item.price * item.quantity,
+//       0
+//     );
+
+//     const newOrder = new Order({
+//       userId,
+//       items: cart.items,
+//       totalAmount: total,
+//       address,
+//       phone
+//     });
+
+//     await newOrder.save();
+
+//     // Clear cart
+//     cart.items = [];
+//     await cart.save();
+
+//     res.json({ message: "Order placed successfully!" });
+
+//   } catch (err) {
+//     res.status(500).json({ message: "Server error" });
+//   }
+// });
+
 app.post("/api/order", authMiddleware, async (req, res) => {
   try {
-    const { address, phone } = req.body;
+    const { address, phone, items } = req.body; // 🔥 selected items
     const userId = req.user.id;
+
+    if (!items || items.length === 0) {
+      return res.status(400).json({ message: "No items selected" });
+    }
 
     const cart = await Cart.findOne({ userId });
 
-    if (!cart || cart.items.length === 0) {
-      return res.status(400).json({ message: "Cart empty" });
+    if (!cart) {
+      return res.status(400).json({ message: "Cart not found" });
     }
 
-    const total = cart.items.reduce(
+    // calculate total
+    const total = items.reduce(
       (acc, item) => acc + item.price * item.quantity,
       0
     );
 
     const newOrder = new Order({
       userId,
-      items: cart.items,
+      items: items,
       totalAmount: total,
       address,
       phone
@@ -623,18 +746,20 @@ app.post("/api/order", authMiddleware, async (req, res) => {
 
     await newOrder.save();
 
-    // Clear cart
-    cart.items = [];
+    // 🔥 remove ordered items from cart
+    cart.items = cart.items.filter(
+      cartItem => !items.some(orderItem => orderItem._id == cartItem._id)
+    );
+
     await cart.save();
 
     res.json({ message: "Order placed successfully!" });
 
   } catch (err) {
+    console.log(err);
     res.status(500).json({ message: "Server error" });
   }
 });
-
-
 
 
 
